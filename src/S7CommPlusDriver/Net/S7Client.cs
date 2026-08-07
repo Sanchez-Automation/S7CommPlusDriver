@@ -7,7 +7,6 @@
  /****************************************************************************/
 #endregion
 
-using OpenSsl;
 using System;
 using System.IO;
 using System.Threading;
@@ -19,7 +18,7 @@ namespace S7CommPlusDriver
 	// |  it under the terms of the Lesser GNU General Public License as published by |
 	// |  the Free Software Foundation, either version 3 of the License, or           |
 	// |  (at your option) any later version.                                         |
-	public class S7Client : OpenSSLConnector.IConnectorCallback
+	public class S7Client : TlsConnector.IConnectorCallback
 	{
 		#region [Constants and TypeDefs]
 
@@ -71,12 +70,9 @@ namespace S7CommPlusDriver
 		bool m_SslActive = false;
 		Thread m_runThread;
 		bool m_runThread_DoStop;
-		IntPtr m_ptr_ssl_method;
-		IntPtr m_ptr_ctx;
-		OpenSSLConnector m_sslconn;
+		TlsConnector m_tlsconn;
 
 		DateTime m_DateTimeStarted;
-		Native.SSL_CTX_keylog_cb_func m_keylog_cb;
 
 		// OpenSSL möchte Daten auf den Socket aussenden.
 		public void WriteData(byte[] pData, int dataLength)
@@ -95,57 +91,25 @@ namespace S7CommPlusDriver
 		{
 			// Netzwerk meldet eintreffende Daten
 			byte[] buf = new byte[8192];
-			int bytesRead = m_sslconn.Receive(ref buf, buf.Length);
+			int bytesRead = m_tlsconn.Receive(ref buf, buf.Length);
 			// Console.WriteLine("S7Client - OpenSSL OnDataAvailable: bytesRead=" + bytesRead);
 			byte[] readData = new byte[bytesRead];
 			Array.Copy(buf, readData, bytesRead);
 			OnDataReceived?.Invoke(readData, bytesRead);
 		}
 
-		// OpenSSL Key Callback Funktion. Gibt die ausgehandelden privaten Schlüssel aus. Kann beispielsweise
-		// in eine Wireshark Aufzeichnung eingefügt werden um dort die TLS Kommunikation zu entschlüsseln.
-		public void SSL_CTX_keylog_cb(IntPtr ssl, string line)
-		{
-			string filename = "key_" + m_DateTimeStarted.ToString("yyyyMMdd_HHmmss") + ".log";
-			StreamWriter file = new StreamWriter(filename, append: true);
-			file.WriteLine(line);
-			file.Close();
-		}
-
-		// Startet OpenSSL und aktiviert ab jetzt TLS
+		// Aktiviert TLS auf dem bestehenden ISO-Tunnel.
 		public int SslActivate()
 		{
-			int ret;
 			try
 			{
-				ret = Native.OPENSSL_init_ssl(0, IntPtr.Zero); // returns 1 on success or 0 on error
-				if (ret != 1) 
-                {
-					return S7Consts.errOpenSSL;
-				}
-				m_ptr_ssl_method = Native.ExpectNonNull(Native.TLS_client_method());
-				m_ptr_ctx = Native.ExpectNonNull(Native.SSL_CTX_new(m_ptr_ssl_method));
-				// TLS 1.3 forcieren, da wegen TLS on IsoOnTCP bekannt sein muss, um wie viele Bytes sich die verschlüsselten
-				// Daten verlängern um die Pakete auf S7CommPlus-Ebene entsprechend zu fragmentieren.
-				// Die Verlängerung geschieht z.B. durch Padding und HMAC. Bei TLS 1.3 existiert mit GCM kein Padding und verlängert sich immer
-				// um 16 Bytes. Da auch TLS_CHACHA20_POLY1305_SHA256 zu den TLS 1.3  CipherSuite zählt, explizit die anderen setzen.
-				Native.SSL_CTX_ctrl(m_ptr_ctx, Native.SSL_CTRL_SET_MIN_PROTO_VERSION, Native.TLS1_3_VERSION, IntPtr.Zero);
-				ret = Native.SSL_CTX_set_ciphersuites(m_ptr_ctx, "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256");
-				if (ret != 1)
-                {
-					return S7Consts.errOpenSSL;
-				}
-				m_sslconn = new OpenSSLConnector(m_ptr_ctx, this);
-				m_sslconn.ExpectConnect();
-
-				// Keylog callback setzen
-				m_keylog_cb = new Native.SSL_CTX_keylog_cb_func(SSL_CTX_keylog_cb);
-				Native.SSL_CTX_set_keylog_callback(m_ptr_ctx, m_keylog_cb);
-
+				m_tlsconn = new TlsConnector(this);
 				m_SslActive = true;
+				m_tlsconn.Activate(IPAddress);
 			} 
 			catch
             {
+				m_SslActive = false;
 				return S7Consts.errOpenSSL;
 			}
 			return 0;
@@ -155,7 +119,8 @@ namespace S7CommPlusDriver
 		public void SslDeactivate()
 		{
 			m_SslActive = false;
-			// TODO: Ist hier etwas zu OpenSSL-Ressourcen explizit freizugeben?
+			m_tlsconn?.Dispose();
+			m_tlsconn = null;
 		}
 		#endregion
 
@@ -183,7 +148,7 @@ namespace S7CommPlusDriver
 					if (m_SslActive)
 					{
 						// Durch SSL eingelesene Daten an SSL weiterleiten
-						m_sslconn.ReadCompleted(Buffer, Size);
+						m_tlsconn.ReadCompleted(Buffer, Size);
 					} else {
 						// Wenn etwas gelesen werden konnte, Client benachrichtigen
 						OnDataReceived?.Invoke(Buffer, Size);
@@ -275,7 +240,7 @@ namespace S7CommPlusDriver
 		{
 			if (m_SslActive)
 			{
-				m_sslconn.Write(Buffer, Buffer.Length);
+				m_tlsconn.Write(Buffer, Buffer.Length);
 			}
 			else
 			{
@@ -388,8 +353,8 @@ namespace S7CommPlusDriver
 
 		public byte[] getOMSExporterSecret()
 		{
-			if (m_sslconn == null) return null;
-			return m_sslconn.getOMSExporterSecret();
+			if (m_tlsconn == null) return null;
+			return m_tlsconn.getOMSExporterSecret();
 		}
 
 		#endregion
@@ -448,6 +413,7 @@ namespace S7CommPlusDriver
 
 		public int Disconnect()
 		{
+			SslDeactivate();
 			m_runThread_DoStop = true;
 			m_runThread?.Join();
 
