@@ -26,6 +26,26 @@ Notes:
 - Removed .NET Framework-specific imports/references and Windows-only post-build DLL copy usage.
 - WinForms GUI project remains unported and excluded from Linux validation path.
 
+### Solution file fix (`S7CommPlusDriver.sln`)
+
+The original `.sln` only mapped `Debug|x64` / `Debug|x86` to `Build.0` for each
+project — there was no `Any CPU` build mapping. Since `dotnet build`/`dotnet restore`
+default to the `Any CPU` solution configuration when no `-p:Platform` is passed, a
+plain `dotnet build S7CommPlusDriver.sln` matched zero projects and silently reported
+"Build succeeded, 0 errors" while compiling nothing (`warning : Unable to find a
+project to restore!`). `S7CommPlusGUIBrowser` (still net472/WinForms, unbuildable on
+Linux) being present in the `.sln` made this easy to miss.
+
+Fixed by regenerating the `.sln` from scratch (`dotnet new sln` + `dotnet sln add`)
+containing only the three portable net8.0 projects — `S7CommPlusDriver`, `DriverTest`,
+`Zlib.net`. None of them declare a `RuntimeIdentifier`/`Platform` constraint anymore
+(that requirement existed only for the native OpenSSL P/Invoke DLLs, now removed), so
+a clean `Any CPU` solution is sufficient. `S7CommPlusGUIBrowser`'s source is untouched
+on disk, just no longer referenced by the solution.
+
+Verified: `dotnet build S7CommPlusDriver.sln` now actually compiles all three projects
+(0 errors; only the pre-existing SHA1-obsolete warnings in `Legitimation.cs` remain).
+
 ## TLS Layer Replacement
 
 ### Removed legacy OpenSSL backend
@@ -139,6 +159,7 @@ Primary edited files:
 - `src/S7CommPlusDriver/Net/S7Client.cs`
 - `src/S7CommPlusDriver/Net/TlsConnector.cs`
 - `src/DriverTest/Program.cs`
+- `src/S7CommPlusDriver.sln` (regenerated: removed `S7CommPlusGUIBrowser`, fixed `Any CPU` build mapping)
 
 Primary deleted files/directories:
 - `src/S7CommPlusDriver/OpenSSL/Native.cs`
