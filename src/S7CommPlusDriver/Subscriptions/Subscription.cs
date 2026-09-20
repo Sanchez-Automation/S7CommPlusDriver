@@ -35,12 +35,56 @@ namespace S7CommPlusDriver
         uint m_SubscriptionObjectId;
 
         /// <summary>
+        /// Fork patch: the tags of the current subscription by their item reference id (as used in Notification.Values).
+        /// Returns a copy, so it is safe to keep.
+        /// </summary>
+        public IReadOnlyDictionary<uint, PlcTag> SubscribedTags
+        {
+            get { return new Dictionary<uint, PlcTag>(m_SubscribedTags ?? new Dictionary<uint, PlcTag>()); }
+        }
+
+        /// <summary>
+        /// Fork patch: deletes only the subscription object. Unlike SubscriptionDelete() this keeps the session,
+        /// so a new subscription can be created afterwards on the same connection.
+        /// </summary>
+        public int SubscriptionRemove()
+        {
+            uint id = m_SubscriptionObjectId;
+            if (m_SubscribedTags != null)
+            {
+                m_SubscribedTags.Clear();
+            }
+            m_SubscriptionObjectId = 0;
+            if (id == 0)
+            {
+                return 0;
+            }
+            return DeleteObject(id);
+        }
+
+        /// <summary>Fork patch: object id of the current subscription; equals Notification.SubscriptionObjectId. 0 if none.</summary>
+        public uint SubscriptionObjectId
+        {
+            get { return m_SubscriptionObjectId; }
+        }
+
+        /// <summary>
         /// Creates a subscription
         /// </summary>
         /// <param name="plcTags">The list of tags to add to the subscription</param>
         /// <param name="cycleTime">Cycle time for update in milliseconds. Lowest value seems to be 100 ms (if it's not dependant on the CPU).</param>
         /// <returns></returns>
         public int SubscriptionCreate(List<PlcTag> plcTags, ushort cycleTime)
+        {
+            return SubscriptionCreate(plcTags, cycleTime, 0x14, 10);
+        }
+
+        /// <summary>
+        /// Fork patch: Creates a subscription with explicit route mode and credit limit (see the table in the code below).
+        /// Route mode 0x14 with credit limit -1 gives an unlimited subscription that also sends an (empty) notification
+        /// every cycle; route mode 0x20 with -1 is unlimited without those empty notifications.
+        /// </summary>
+        public int SubscriptionCreate(List<PlcTag> plcTags, ushort cycleTime, byte routeMode, short creditLimit)
         {
             int res;
             m_SubscribedTags = new Dictionary<uint, PlcTag>();
@@ -51,7 +95,7 @@ namespace S7CommPlusDriver
             subsobj.AddAttribute(Ids.SubscriptionFunctionClassId, new ValueUSInt(0));
             subsobj.AddAttribute(Ids.SubscriptionMissedSendings, new ValueUInt(0));
             subsobj.AddAttribute(Ids.SubscriptionSubsystemError, new ValueLInt(0));
-            subsobj.AddAttribute(Ids.SubscriptionRouteMode, new ValueUSInt(0x14)); // TODO Unknown, mostly seen 0x04, 0x14 or 0x15. Needs to be tested
+            subsobj.AddAttribute(Ids.SubscriptionRouteMode, new ValueUSInt(routeMode)); // TODO Unknown, mostly seen 0x04, 0x14 or 0x15. Needs to be tested
 
             // Testresults of some RouteModes (0x04, 0x14, 0x20) some applications are using, together with credit limits:
             // For Alarm Subscription RouteMode 0x02 is used.
@@ -76,7 +120,7 @@ namespace S7CommPlusDriver
             subsobj.AddAttribute(Ids.SubscriptionCycleTime, new ValueUDInt(cycleTime));
             subsobj.AddAttribute(Ids.SubscriptionDisabled, new ValueUSInt(0));
             subsobj.AddAttribute(Ids.SubscriptionCount, new ValueUSInt(0));
-            m_NextCreditLimit = 10;
+            m_NextCreditLimit = creditLimit;
             subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(m_NextCreditLimit)); // -1=unlimited, 255 = max
             subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(65535));
             // 1055 = Unknown -> is working without setting this.

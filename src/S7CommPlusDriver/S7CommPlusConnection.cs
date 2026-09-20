@@ -330,11 +330,52 @@ namespace S7CommPlusDriver
             // If a complete (usable) PDU is received, add to the queue (threadsafe) for readout
             if (m_NewS7CommPlusReceived)
             {
-                // Push complete PDU to the queue
-                m_Mutex.WaitOne();
-                m_ReceivedPDUs.Enqueue(m_ReceivedTempPDU);
-                m_Mutex.ReleaseMutex();
                 m_NewS7CommPlusReceived = false;
+                // Fork patch: when a NotificationReceived handler is attached, notifications are delivered to it
+                // instead of the response queue. Otherwise (default) behaviour is unchanged.
+                var notificationHandler = NotificationReceived;
+                if (notificationHandler != null && IsNotificationPdu(m_ReceivedTempPDU))
+                {
+                    DispatchNotification(notificationHandler, m_ReceivedTempPDU);
+                }
+                else
+                {
+                    // Push complete PDU to the queue
+                    m_Mutex.WaitOne();
+                    m_ReceivedPDUs.Enqueue(m_ReceivedTempPDU);
+                    m_Mutex.ReleaseMutex();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Fork patch. Raised, on the receive thread, for every notification (variable changes, alarms) while a
+        /// handler is attached. Handlers must return quickly (queue the work elsewhere) and must not call back
+        /// into this connection. With a handler attached, notifications no longer reach the response queue,
+        /// so TestWaitForVariableChangeNotifications / TestWaitForAlarmNotifications must not be used.
+        /// </summary>
+        public event Action<Notification> NotificationReceived;
+
+        private static bool IsNotificationPdu(MemoryStream pdu)
+        {
+            // Byte 0 = protocol version, byte 1 = opcode
+            return pdu.Length > 1 && pdu.GetBuffer()[1] == Opcode.Notification;
+        }
+
+        private static void DispatchNotification(Action<Notification> handler, MemoryStream pdu)
+        {
+            try
+            {
+                pdu.Position = 0;
+                var notification = Notification.DeserializeFromPdu(pdu);
+                if (notification != null)
+                {
+                    handler(notification);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("S7CommPlusConnection - NotificationReceived: dropped a notification: " + ex.Message);
             }
         }
 

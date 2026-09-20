@@ -153,6 +153,45 @@ Cause: the network path to the PLCSIM instances, not the driver. Setup: the driv
 
 So the delay is in the 10.10.10.x segment (Proxmox bridge, Windows VM, or PLCSIM's virtual adapter). Not yet isolated further; the next check is to ping the Windows VM's own address on that network and compare it with the PLCSIM instances. A physical CPU would not show this. Consumers should use a connect timeout and retry regardless.
 
+## Fork patches to the driver (beyond the port)
+
+These are changes to upstream driver code, kept small and additive so upstream merges stay easy. Existing
+behaviour is unchanged unless the new members are used.
+
+### Notification routing and subscription control (branch `notification-routing`)
+
+Needed so subscriptions, writes and keepalive can share ONE connection. In the unpatched driver, notifications
+and replies share one queue, so any request made while a notification is queued takes the notification as its
+reply and the connection stays out of step from then on.
+
+- `S7CommPlusConnection.NotificationReceived` (new event). While a handler is attached, notifications (variable
+  changes and alarms) are decoded and delivered to it on the receive thread instead of the reply queue.
+  Without a handler nothing changes, so `TestWaitForVariableChangeNotifications` and
+  `TestWaitForAlarmNotifications` keep working. Handlers must return quickly and must not call into the connection.
+  The opcode byte of the assembled PDU (`Opcode.Notification`) decides.
+- `SubscriptionCreate(tags, cycleTime, routeMode, creditLimit)` (new overload; the old signature calls it with
+  0x14 and 10, as before). Measured on CPU 1511-1 PN (PLCSIM Advanced), matching the table in the driver comments:
+
+  | Route mode | Credit limit | Result |
+  |---|---|---|
+  | 0x14 | 10 (old default) | 10 notifications, 9 of them empty, then it stops: credit is used up within about a second |
+  | 0x14 | -1 | unlimited; every cycle a notification, empty when nothing changed (60 in 6 s at 100 ms) |
+  | 0x20 | -1 | unlimited; only the initial values and real changes |
+  | 0x14 or 0x20 | 255 | credit is consumed per notification (60 in 6 s with 0x14), so it needs topping up |
+
+  The middleware uses 0x14 with -1: no credit handling is needed, and the empty notification every cycle is a
+  heartbeat that proves the link is alive without any extra requests.
+- `SubscriptionRemove()` (new). Deletes only the subscription object. The existing `SubscriptionDelete()` deletes
+  the whole second session object, after which no new subscription can be created on that connection (the next
+  create fails and the PLC drops the TLS session). With `SubscriptionRemove()` a subscription can be replaced on
+  the live connection: tested with four create/remove rounds using different symbol sets, notifications and writes
+  working throughout.
+- `SubscribedTags` (copy of the item reference id to tag map) and `SubscriptionObjectId` (read-only accessors).
+
+Things measured that do not need a patch: the PLC does not echo the subscription change counter in
+notifications (always 0), and notifications and replies arrive strictly in order, so once `SubscriptionRemove()`
+returns, no notification of the removed subscription can still arrive.
+
 ## Build Validation
 
 Validated on Linux host:
