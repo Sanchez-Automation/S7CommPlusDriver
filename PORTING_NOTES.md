@@ -114,15 +114,44 @@ dotnet run --project src/DriverTest/DriverTest.csproj -- 10.10.10.50
 dotnet run --project src/DriverTest/DriverTest.csproj -- 10.10.10.50 "" "" "DriverTest.Type.Bit_Bool,DriverTest.Type.Int_Val"
 ```
 
-### Verified run (PLCSIM Advanced)
+### Test targets
 
-Target: PLCSIM Advanced at 10.10.10.50, empty password and user.
-Result: 32/32 PASS (connect + TLS + Browse in about 200 ms, then write, read-back and
-restore for every member above), exit code 0.
+Everything is simulated (PLCSIM Advanced) for now. Both instances emulate the same CPU:
 
-Also verified with password legitimation: CPU protection set to "no access" with a password, `dotnet run --project src/DriverTest/DriverTest.csproj -- 10.10.10.50 <password>` gives 32/32 PASS (connect about 240 ms). Without the password, `Connect()` still returns success, but `Browse()` throws (unhandled `InvalidOperationException` at `S7CommPlusConnection.cs`, `First()` on the explore response, upstream code) because the PLC returns no program object.
+| IP | CPU | Order number | Firmware | Access |
+|---|---|---|---|---|
+| 10.10.10.50 | S7-1500 CPU 1511-1 PN | 6ES7 511-1AL03-0AB0 | V3.1 | no password (full access) |
+| 10.10.10.51 | S7-1500 CPU 1511-1 PN | 6ES7 511-1AL03-0AB0 | V3.1 | password protected ("no access" level) |
 
-Not yet covered: array tags, UDT-level (non-leaf) reads, the legacy legitimation path (older firmware), TLS 1.2-only PLCs.
+Plan: test with the newest PLCSIM Advanced and firmware versions available; move to a later
+firmware only if a test needs it. A physical CPU is not part of the plan yet.
+
+### Verified runs (PLCSIM Advanced)
+
+Test data: the `DriverTest.Type` UDT (see above), 32 checks per run.
+
+- **10.10.10.50, empty password and user:** 32/32 PASS, connect + TLS in about 220 ms, exit code 0.
+- **10.10.10.51, with the password:** 32/32 PASS, connect about 230 ms (password legitimation via the TLS exporter secret, see TLS section), exit code 0. Password is deliberately not recorded here.
+- A full 32-check run takes about 29 s wall time, the same on both PLCs.
+- Earlier, 10.10.10.50 was itself set to "no access" plus a password, and the same password run passed there too.
+- Without the password on a protected CPU, `Connect()` still returns success, but `Browse()` throws (unhandled `InvalidOperationException` at `S7CommPlusConnection.cs`, `First()` on the explore response, upstream code) because the PLC returns no program object.
+
+Not yet covered: array tags, UDT-level (non-leaf) reads, the legacy legitimation path (older firmware), TLS 1.2-only PLCs, a physical CPU.
+
+### Known issue: intermittent slow connect
+
+Connect time is normally about 220 ms, but some attempts take much longer. Measured with 12 connect-only attempts per PLC on the BouncyCastle build: 7 of 24 took over 0.5 s, with worst cases of 11.2 s, 6.4 s and 5.9 s. The same test on the previous `SslStream` build (commit `d7c7c90`, 10.10.10.50) gave 5 of 24 over 0.5 s, worst case 3.0 s. It happens on both PLCs, with and without a password, so it is not caused by the password path or by the TLS library swap. The worst-case delays looked slightly longer with BouncyCastle, but the samples are too small to conclude.
+
+One additional unexplained event: the first run against 10.10.10.51 connected after 11.3 s and the test then did not finish within 150 s. It did not recur in 8 later full runs.
+
+Rerun after 10.10.10.51 was reloaded with the correct project (10 connect-only attempts each, BouncyCastle build): 10.10.10.50 gave nine at 223-233 ms and one at 5468 ms; 10.10.10.51 gave ten at 230-374 ms. Full write/read runs: both 32/32 PASS (connect 227 ms and 704 ms, about 30 s wall each). So the slow connect still occurs on a clean PLC, but less often than in the earlier measurement, and the earlier `.51` numbers may have been affected by its wrong project.
+
+Cause: the network path to the PLCSIM instances, not the driver. Setup: the driver runs on an Ubuntu VM (10.10.10.10 on `enp6s19`); PLCSIM Advanced and TIA run on a Windows 11 VM, both VMs hosted on Proxmox. With the driver out of the picture:
+- Plain TCP connects to port 102 (60 attempts each, 0.3 s apart) have a median of 0.6 ms, but stall up to 1.7 s (10.10.10.50) and 3.8 s (10.10.10.51).
+- Ping (100 x 0.2 s, 0% loss) has a minimum of 0.3 ms but a maximum of 551 ms (.50) and 888 ms (.51), average 11 ms and 38 ms.
+- Ping to the gateway on the Ubuntu VM's other network (`enp6s18`, 10.0.0.x) is steady: 0.2 to 0.7 ms, no spikes. CPU steal and load on the Ubuntu VM are negligible.
+
+So the delay is in the 10.10.10.x segment (Proxmox bridge, Windows VM, or PLCSIM's virtual adapter). Not yet isolated further; the next check is to ping the Windows VM's own address on that network and compare it with the PLCSIM instances. A physical CPU would not show this. Consumers should use a connect timeout and retry regardless.
 
 ## Build Validation
 
@@ -144,7 +173,7 @@ Use probe-first troubleshooting before code-level debugging:
 1. TCP reachability probe:
 
 ```bash
-nc -vz 10.0.0.20 102
+nc -vz 10.10.10.50 102
 ```
 
 2. If probe fails:
@@ -161,7 +190,7 @@ nc -vz 10.0.0.20 102
 
 - Certificate validation remains permissive for compatibility; this mirrors prior behavior but is not hardened trust.
 - `Connect()` returns success even when the session has no real access (only a console warning), and `Browse()` can throw instead of returning an error code. Callers must check the access level and catch exceptions.
-- Password legitimation depends on BouncyCastle's exporter matching what the PLC derives; verified on PLCSIM Advanced, still to be verified on a physical CPU and other firmware.
+- Password legitimation depends on BouncyCastle's exporter matching what the PLC derives; verified on PLCSIM Advanced (CPU 1511-1 PN, firmware V3.1), still to be verified on a physical CPU and other firmware.
 - WinForms GUI project is intentionally excluded from Linux .NET 8 validation scope.
 
 ## Audit Trail Summary
