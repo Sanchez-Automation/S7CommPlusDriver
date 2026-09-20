@@ -151,7 +151,13 @@ Cause: the network path to the PLCSIM instances, not the driver. Setup: the driv
 - Ping (100 x 0.2 s, 0% loss) has a minimum of 0.3 ms but a maximum of 551 ms (.50) and 888 ms (.51), average 11 ms and 38 ms.
 - Ping to the gateway on the Ubuntu VM's other network (`enp6s18`, 10.0.0.x) is steady: 0.2 to 0.7 ms, no spikes. CPU steal and load on the Ubuntu VM are negligible.
 
-So the delay is in the 10.10.10.x segment (Proxmox bridge, Windows VM, or PLCSIM's virtual adapter). Not yet isolated further; the next check is to ping the Windows VM's own address on that network and compare it with the PLCSIM instances. A physical CPU would not show this. Consumers should use a connect timeout and retry regardless.
+Isolated later (Ubuntu VM 10.10.10.10 / 10.0.0.50; Windows VM addresses: 10.10.10.20 "Ubuntu-Dev" adapter, 10.10.10.200 "PLCSIM Advanced" adapter, 10.0.0.30 on the general network; the PLCs are only reachable through the PLCSIM adapter):
+
+- **The Windows 11 VM drops incoming TCP connection requests (SYN packets), about 5 to 13% of them.** TCP connects to Windows services (ports 445, 135, 3389) fail the first attempt and succeed after the 1 s SYN retransmit (or 3 s after two lost SYNs, worst about 3.4 to 4.8 s). The Linux SYN retransmit counter matches: 14, 5, 19, 4, 10 and 16 retransmits per 100 to 150 connects. The same happens to the PLC instances behind it (10 to 20 retransmits per 100 to 150 connects to port 102).
+- **The same VM on the clean network shows it too:** connecting to 10.0.0.30 (the Windows VM's address on the general 10.0.0.x network) loses SYNs at the same rate (19, 4 and 10 retransmits in 150), while ping to 10.0.0.30 is perfect (0.3 to 0.75 ms, 0% loss).
+- **Everything else is clean:** 300 connects to other hosts on 10.0.0.x (gateway and 10.0.0.3) had 0 retransmits and a worst case of 4 ms; the Ubuntu VM has no CPU steal; established connections stay at about 5 ms per read.
+- So the fault is in the Windows VM (something that treats new TCP connections badly: Windows Defender Firewall or another security or filter driver, or a virtio NIC offload problem), not in the network, the Proxmox bridge or the driver. ICMP passing cleanly and TCP data flowing normally fit that. Not yet fixed. Suggested checks on the Windows VM: enable dropped-packet logging in Windows Defender Firewall and look for dropped SYNs from 10.10.10.10 / 10.0.0.50; disable the firewall temporarily and repeat the test; disable checksum and large-send offload on the virtio adapters (or try an Intel E1000E NIC model in Proxmox); list third-party filter drivers on the adapters.
+- This only slows down **new** connections (connect and reconnect attempts). A physical CPU on a normal network would not show it. The middleware already tolerates it (timeouts and retries).
 
 ## Fork patches to the driver (beyond the port)
 
