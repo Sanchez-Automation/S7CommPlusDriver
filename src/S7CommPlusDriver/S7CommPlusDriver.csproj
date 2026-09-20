@@ -11,4 +11,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Zlib.net\Zlib.net.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+  </ItemGroup>
 </Project>
