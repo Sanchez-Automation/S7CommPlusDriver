@@ -281,7 +281,7 @@ namespace S7CommPlusDriver
                 // Login with only password = legacy login
                 // Hash password
                 byte[] hashedPw;
-                using (SHA1Managed sha1 = new SHA1Managed())
+                using (SHA1 sha1 = SHA1.Create())
                 {
                     hashedPw = sha1.ComputeHash(Encoding.UTF8.GetBytes(password));
                 }
@@ -336,7 +336,7 @@ namespace S7CommPlusDriver
 
             // Calculate challengeResponse [sha1(password) xor challenge]
             byte[] challengeResponse;
-            using (SHA1Managed sha1 = new SHA1Managed())
+            using (SHA1 sha1 = SHA1.Create())
             {
                 challengeResponse = sha1.ComputeHash(Encoding.UTF8.GetBytes(password));
             }

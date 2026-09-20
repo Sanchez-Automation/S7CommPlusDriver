@@ -61,7 +61,7 @@ namespace S7CommPlusDriver
 
         private sealed class PlcTlsClient : DefaultTlsClient
         {
-            private TlsContext m_context;
+            private TlsContext m_plcContext;
 
             public PlcTlsClient() : base(new BcTlsCrypto()) { }
 
@@ -70,7 +70,7 @@ namespace S7CommPlusDriver
             public override void Init(TlsClientContext context)
             {
                 base.Init(context);
-                m_context = context;
+                m_plcContext = context;
             }
 
             // BouncyCastle only allows key export from this callback, so capture it here.
@@ -78,7 +78,7 @@ namespace S7CommPlusDriver
             public override void NotifyHandshakeComplete()
             {
                 base.NotifyHandshakeComplete();
-                OmsExporterSecret = m_context.ExportKeyingMaterial("EXPERIMENTAL_OMS", null, 32);
+                OmsExporterSecret = m_plcContext.ExportKeyingMaterial("EXPERIMENTAL_OMS", null, 32);
             }
 
             protected override Org.BouncyCastle.Tls.ProtocolVersion[] GetSupportedVersions()

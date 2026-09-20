@@ -579,6 +579,19 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
+        /// Fork patch: drops the connection at once. Unlike Disconnect() it does not first ask the PLC to delete the
+        /// session, which on a dead connection waits for the full request timeout plus the receive thread's read
+        /// timeout (5 to 7 seconds). Use it when the connection is dead or suspected to be.
+        /// </summary>
+        public void Abort()
+        {
+            if (m_client != null)
+            {
+                m_client.Abort();
+            }
+        }
+
+        /// <summary>
         /// Deletes the object with the given Id.
         /// </summary>
         /// <param name="deleteObjectId">The object Id to delete</param>
@@ -832,7 +845,14 @@ namespace S7CommPlusDriver
 
             #region Evaluate all data blocks that then need to be browsed
 
-            var obj = exploreRes.Objects.First(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+            var obj = exploreRes.Objects.FirstOrDefault(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+            if (obj == null)
+            {
+                // Fork patch: a protected CPU returns no program object to a session without full access.
+                // Report that instead of throwing an InvalidOperationException.
+                Console.WriteLine("S7CommPlusConnection - Browse: the PLC returned no program object. The CPU is protected and the session has no full access.");
+                return S7Consts.errCliNeedPassword;
+            }
 
             foreach (var ob in obj.GetObjects())
             {

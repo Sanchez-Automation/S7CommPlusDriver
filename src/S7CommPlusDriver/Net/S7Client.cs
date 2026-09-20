@@ -422,6 +422,21 @@ namespace S7CommPlusDriver
 			return 0;
 		}
 
+		/// <summary>
+		/// Fork patch: drops the connection at once. The socket is closed first, which releases the receive thread
+		/// immediately instead of after its read timeout, and no TLS close is attempted.
+		/// </summary>
+		public void Abort()
+		{
+			m_runThread_DoStop = true;
+			if (Socket != null)
+			{
+				Socket.Close();
+			}
+			SslDeactivate();
+			m_runThread?.Join();
+		}
+
 		public int GetParam(Int32 ParamNumber, ref int Value)
 		{
 			int Result = 0;

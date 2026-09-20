@@ -192,6 +192,21 @@ Things measured that do not need a patch: the PLC does not echo the subscription
 notifications (always 0), and notifications and replies arrive strictly in order, so once `SubscriptionRemove()`
 returns, no notification of the removed subscription can still arrive.
 
+### Hardening patches (branch `hardening`)
+
+- `S7CommPlusConnection.Abort()` (new). `Disconnect()` first asks the PLC to delete the session and waits for the
+  answer (the request timeout, 5 s by default), and then waits for the receive thread (up to its 2 s read timeout).
+  On a dead connection that is 5 to 7 s, which is exactly what was measured (5.0, 6.5 and 7.0 s) and it delays the
+  next reconnect attempt. `Abort()` closes the socket first, which releases the receive thread at once, and skips the
+  goodbye. Use it when the connection has failed; `Disconnect()` stays the polite way to end a healthy one.
+- `Browse()` no longer throws on a protected CPU. A session without full access gets no program object, and the
+  unpatched code did `First()` on the empty result (`InvalidOperationException`). It now returns
+  `S7Consts.errCliNeedPassword` ("CPU : Function not authorized for current protection level").
+- `Legitimation.cs`: `new SHA1Managed()` replaced by `SHA1.Create()`. Same hash, no obsolete-API warnings.
+- `TlsConnector`: a private field renamed because it hid an inherited member (compiler warning).
+
+The whole solution now builds with 0 warnings and 0 errors.
+
 ## Build Validation
 
 Validated on Linux host:
@@ -203,7 +218,7 @@ dotnet build DriverTest/DriverTest.csproj -c Release
 
 Result:
 - Build succeeded for `Zlib.net`, `S7CommPlusDriver`, `DriverTest` on `net8.0`.
-- Remaining warnings are pre-existing SHA1 deprecation warnings in legitimation code.
+- No warnings (the SHA1 deprecation warnings were removed by the hardening patches).
 
 ## Network and Firmware Triage (PLCSIM)
 
@@ -228,7 +243,7 @@ nc -vz 10.10.10.50 102
 ## Compatibility Notes / Risks
 
 - Certificate validation remains permissive for compatibility; this mirrors prior behavior but is not hardened trust.
-- `Connect()` returns success even when the session has no real access (only a console warning), and `Browse()` can throw instead of returning an error code. Callers must check the access level and catch exceptions.
+- `Connect()` returns success even when the session has no real access (only a console warning); `Browse()` then returns `errCliNeedPassword`. Callers must check that result.
 - Password legitimation depends on BouncyCastle's exporter matching what the PLC derives; verified on PLCSIM Advanced (CPU 1511-1 PN, firmware V3.1), still to be verified on a physical CPU and other firmware.
 - WinForms GUI project is intentionally excluded from Linux .NET 8 validation scope.
 
